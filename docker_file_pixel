@@ -1,0 +1,62 @@
+
+# FROM python:3
+# # Use nvidia/cuda image
+# FROM nvidia/cuda:12.1.3-base-ubuntu20.04 
+# FROM pytorch/pytorch:1.4-cuda10.1-cudnn7-devel
+# FROM arm64v8/python:3
+# FROM linux/arm64 
+# FROM --platform=linux/arm64 alexberkovich/alpine-anaconda3:latest
+# FROM bitnami/pytorch:2.3.1
+FROM pytorch/pytorch:2.3.1-cuda11.8-cudnn8-devel
+#docker pull pytorch/pytorch:2.3.1-cuda11.8-cudnn8-devel
+# The /app directory should act as the main application directory
+WORKDIR /workspace
+
+# Copy local directories to the current local directory of our docker image (/app)
+COPY ./requirements.txt /workspace/requirements.txt
+
+# Install node packages, install serve, build the app, and remove dependencies at the end
+RUN apt-get update -y
+# RUN apt-get install -y nvidia-container-toolkit
+RUN apt-get -y install python3-pip
+RUN apt-get -y install git
+
+
+COPY ./mood/ /workspace/mood
+#COPY ./data/residual /workspace/residual
+RUN pip install --no-cache-dir -r ./requirements.txt
+
+COPY ./docker/scripts/run_pixel_abdom.sh  /workspace/run_pixel_abdom.sh 
+COPY ./docker/scripts/run_pixel_brain.sh  /workspace/run_pixel_brain.sh 
+
+
+COPY ./docker/main_python/main_pixel_abdom_postprocess.py /workspace/main_pixel_abdom_postprocess.py
+COPY ./docker/main_python/main_pixel_abdom_vae.py /workspace/main_pixel_abdom_vae.py
+
+COPY ./docker/main_python/main_pixel_brain_postprocess.py /workspace/main_pixel_brain_postprocess.py
+COPY ./docker/main_python/main_pixel_brain_vae.py /workspace/main_pixel_brain_vae.py
+
+
+RUN chmod +x /workspace/*.sh
+
+COPY ./data/MAPS_final_BetaVAE_brain /workspace/maps
+COPY ./data/MAPS_final_unet_brain /workspace/maps_unet
+RUN chmod a+rwx -R /workspace/maps
+RUN chmod a+rwx -R /workspace/maps_unet
+
+COPY ./data/MAPS_final_BetaVAE_abdom /workspace/maps_abdom
+COPY ./data/MAPS_final_unet_abdom /workspace/maps_unet_abdom
+RUN chmod a+rwx -R /workspace/maps_abdom
+RUN chmod a+rwx -R /workspace/maps_unet_abdom
+
+COPY ./data/MS_extract.json /workspace/MS_extract.json
+
+RUN mkdir /mnt/data
+RUN mkdir /mnt/pred
+RUN mkdir -p /mnt/pred/tmp
+
+RUN ln -s /mnt/pred/tmp /tmp
+
+RUN chmod a+rwx -R /workspace
+
+RUN export PYTHONPATH="${PYTHONPATH}/workspace"

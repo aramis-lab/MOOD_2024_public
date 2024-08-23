@@ -1,0 +1,645 @@
+import random
+from abc import ABC, abstractmethod
+from collections.abc import Iterable
+from pathlib import Path
+from typing import List, Optional, Tuple, Union
+
+import numpy as np
+from mood.transforms.random_shapes import RandomShapeGenerator
+from mood.transforms.utils import extract_image
+
+__all__ = [
+    "LocalPixelShuffling",
+    "DarkOrBright",
+    "LocalBlurring",
+    "LocalElasticDeformation",
+    "Compose",
+    "RandomCompose",
+]
+
+
+class LocalTransform(ABC):
+    """Template for local transforms using an anomaly generator."""
+
+    def __init__(
+        self,
+        n_anomalies: Union[int, Tuple[int, int]] = (1, 3),
+        anomaly_proportion: Union[float, Tuple[float, float]] = (0.1, 0.2),
+        mask: Optional[Union[str, Path]] = None,
+        radius: Optional[int] = None,
+        n_points: int = 100,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        n_anomalies : Union[int, Tuple[int, int]] (optional, default=(1, 3))
+            Number of anomalies to generate.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        anomaly_proportion : Union[float, Tuple[float, float]] (optional, default=(0.1, 0.2))
+            Anomaly proportion (see RandomShapeGenerator).
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be sampled.
+        mask : Optional[str] (optional, default=None)
+            A mask to restrict where the anomalies are generated.
+        radius : Optional[int] (optional, default=None)
+            see RandomShapeGenerator
+        n_points : int (optional, default=100)
+            see RandomShapeGenerator
+        """
+        self.anomaly_generator = RandomShapeGenerator(radius, n_points)
+
+        try:
+            assert isinstance(anomaly_proportion, float)
+        except AssertionError:
+            assert isinstance(
+                anomaly_proportion, Iterable
+            ), "anomaly_proportion must be a float or an iterable."
+            assert (
+                len(anomaly_proportion) == 2
+            ), "anomaly_proportion must contain two elements."
+        self.anomaly_proportion = anomaly_proportion
+
+        try:
+            assert isinstance(n_anomalies, int)
+        except AssertionError:
+            assert isinstance(
+                n_anomalies, Iterable
+            ), "n_anomalies must be an int or an iterable."
+            assert len(n_anomalies) == 2, "n_anomalies must contain two elements."
+        self.n_anomalies = n_anomalies
+
+        if mask is not None:
+            self.mask = extract_image(mask)
+        else:
+            self.mask = mask
+
+    def _get_params(self) -> List[float]:
+        """
+        Samples the parameters to generate random anomalies.
+
+        Returns
+        -------
+        List[float]
+            The anomalie proportions (see RandomShapeGenerator).
+        """
+        if isinstance(self.n_anomalies, int):
+            n_anomalies = self.n_anomalies
+        else:
+            n_anomalies = random.randint(self.n_anomalies[0], self.n_anomalies[1])
+
+        if isinstance(self.anomaly_proportion, float):
+            anomaly_proportions = [self.anomaly_proportion for _ in range(n_anomalies)]
+        else:
+            anomaly_proportions = []
+            for _ in range(n_anomalies):
+                prop = random.uniform(
+                    self.anomaly_proportion[0], self.anomaly_proportion[1]
+                )
+                anomaly_proportions.append(prop)
+
+        return anomaly_proportions
+
+    @abstractmethod
+    def _apply_transform_on_anomalies(
+        self, img: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Applies the transform in volumes inside a mask.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The input image.
+        mask : np.ndarray
+            The mask of anomalies.
+
+        Returns
+        -------
+        np.ndarray
+            The modified image..
+        """
+        pass
+
+    def __call__(
+        self, img: np.ndarray, anomalies: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Generates anomalies, computes the transform on them
+        and returns the modified image as well as anomalies generated.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The input image.
+        anomalies: Optional[np.ndarray]
+            Precomputed anomalies.
+            If passed, the anomaly generation will be passed and these
+            anomalies will be used.
+            `anomalies` should be a numpy array with (0s and 1s).
+            Useful for composition.
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            The transformed image and the anomalies generated by the RandomShapeGenerator.
+        """
+        anomaly_proportions = self._get_params()
+
+        if anomalies is None:
+            anomalies = self.anomaly_generator.get_random_shapes(
+                img, anomaly_proportions, self.mask
+            )
+        img = self._apply_transform_on_anomalies(img, anomalies)
+
+        return img, anomalies
+
+
+class LocalPixelShuffling(LocalTransform):
+    """Shuffles pixels inside anomaly volumes."""
+
+    def __init__(
+        self,
+        shuffle_factor: Union[float, Tuple[float, float]] = (0.3, 0.8),
+        n_anomalies: Union[int, Tuple[int, int]] = (1, 4),
+        anomaly_proportion: Union[float, Tuple[float, float]] = (0.1, 0.2),
+        mask: Optional[Union[str, Path]] = None,
+        radius: Optional[int] = None,
+        n_points: int = 100,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        shuffle_factor : Union[float, Tuple[float, float]] (optional, default=(0.3, 0.8))
+            Percentage of pixels that will be shuffled inside anomalies.
+        n_anomalies : Union[int, Tuple[int, int]] (optional, default=(1, 4))
+            Number of anomalies to generate.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        anomaly_proportion : Union[float, Tuple[float, float]] (optional, default=(0.1, 0.2))
+            Anomaly proportion (see RandomShapeGenerator).
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be sampled.
+        mask : Optional[str] (optional, default=None)
+            A mask to restrict where the anomalies are generated.
+        radius : Optional[int] (optional, default=None)
+            see RandomShapeGenerator
+        n_points : int (optional, default=100)
+            see RandomShapeGenerator
+        """
+        super().__init__(n_anomalies, anomaly_proportion, mask, radius, n_points)
+        try:
+            assert isinstance(shuffle_factor, float)
+        except AssertionError:
+            assert isinstance(
+                shuffle_factor, Iterable
+            ), "shuffle_factor must be a float or an iterable."
+            assert len(shuffle_factor) == 2, "shuffle_factor must contain two elements."
+            assert (0 < shuffle_factor[0]) and (
+                shuffle_factor[1] <= 1
+            ), "shuffle_factor must be between 0 and 1."
+        else:
+            assert 0 < shuffle_factor <= 1, "shuffle_factor must be between 0 and 1."
+        self.shuffle_factor = shuffle_factor
+
+    def _apply_transform_on_anomalies(
+        self, img: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Shuffles pixels inside a mask.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The image.
+        mask : np.ndarray
+            The mask.
+
+        Returns
+        -------
+        np.ndarray
+            The modified image.
+        """
+        mask_volume = np.sum(mask)
+        if isinstance(self.shuffle_factor, float):
+            shuffle_factor = self.shuffle_factor
+        else:
+            shuffle_factor = random.uniform(
+                self.shuffle_factor[0], self.shuffle_factor[1]
+            )
+
+        n_pixels = int(mask_volume * shuffle_factor)
+        normalized = mask.ravel() / mask_volume
+        indices = np.random.choice(
+            mask.size, size=n_pixels, replace=False, p=normalized
+        )
+        indices_ = np.random.choice(
+            mask.size, size=n_pixels, replace=False, p=normalized
+        )
+        idx, idy, idz = np.unravel_index(indices, mask.shape)
+        idx_, idy_, idz_ = np.unravel_index(indices_, mask.shape)
+
+        img[idx, idy, idz] = img[idx_, idy_, idz_]
+
+        return img
+
+
+class DarkOrBright(LocalTransform):
+    """Darkens or lightens anomaly volumes."""
+
+    def __init__(
+        self,
+        brightness_increase: Union[float, Tuple[float, float]] = (0.1, 2.0),
+        n_anomalies: Union[int, Tuple[int, int]] = (1, 4),
+        anomaly_proportion: Union[float, Tuple[float, float]] = (0.1, 0.2),
+        mask: Optional[Union[str, Path]] = None,
+        radius: Optional[int] = None,
+        n_points: int = 100,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        brightness_increase: Union[float, Tuple[float, float]] = (0.1, 2.0)
+            The increase (if > 1) or decrease (if < 1) of brightness inside the anomalies.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        n_anomalies : Union[int, Tuple[int, int]] (optional, default=(1, 4))
+            Number of anomalies to generate.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        anomaly_proportion : Union[float, Tuple[float, float]] (optional, default=(0.1, 0.2))
+            Anomaly proportion (see RandomShapeGenerator).
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be sampled.
+        mask : Optional[str] (optional, default=None)
+            A mask to restrict where the anomalies are generated.
+        radius : Optional[int] (optional, default=None)
+            see RandomShapeGenerator
+        n_points : int (optional, default=100)
+            see RandomShapeGenerator
+        """
+        super().__init__(n_anomalies, anomaly_proportion, mask, radius, n_points)
+        self.margin = 0.2
+        try:
+            assert isinstance(brightness_increase, float)
+        except AssertionError:
+            assert isinstance(
+                brightness_increase, Iterable
+            ), "brightness_increase must be a float or an iterable."
+            assert (
+                len(brightness_increase) == 2
+            ), "brightness_increase must contain two elements."
+            assert (brightness_increase[0] < 1.0 - self.margin) or (
+                1.0 + self.margin < brightness_increase[1]
+            ), "brightness_increase interval is too close to 1."
+        else:
+            assert (brightness_increase < 1.0 - self.margin) or (
+                1.0 + self.margin < brightness_increase
+            ), "brightness_increase is too close to 1.0."
+        self.brightness_increase = brightness_increase
+
+    def _find_brightness_increase(self) -> float:
+        """
+        Samples a brightness increase factor.
+
+        Returns
+        -------
+        float
+            The brightness increase factor.
+        """
+        if isinstance(self.brightness_increase, float):
+            brightness_increase = self.brightness_increase
+        else:
+            too_small = True
+            while too_small:
+                brightness_increase = random.uniform(
+                    self.brightness_increase[0], self.brightness_increase[1]
+                )
+                too_small = (
+                    1.0 - self.margin <= brightness_increase <= 1.0 + self.margin
+                )
+
+        return brightness_increase
+
+    def _apply_transform_on_anomalies(
+        self, img: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Darkens or lightens volumes inside a mask.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The image.
+        mask : np.ndarray
+            The mask.
+
+        Returns
+        -------
+        np.ndarray
+            The modified image.
+        """
+        brightness_increase = self._find_brightness_increase()
+        img[mask.astype(bool)] = img[mask.astype(bool)] * brightness_increase
+
+        return img
+
+
+class LocalBlurring(LocalTransform):
+    """Darken or lighten anomaly volumes."""
+
+    def __init__(
+        self,
+        std: Union[float, Tuple[float, float]] = (3.0, 10.0),
+        n_anomalies: Union[int, Tuple[int, int]] = (1, 4),
+        anomaly_proportion: Union[float, Tuple[float, float]] = (0.2, 0.3),
+        mask: Optional[Union[str, Path]] = None,
+        radius: Optional[int] = None,
+        n_points: int = 100,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        std : float (optional, default=(3.0, 10.0))
+            Standard deviation of the Gaussian kernel.
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be
+            sampled.
+        n_anomalies : Union[int, Tuple[int, int]] (optional, default=(1, 4))
+            Number of anomalies to generate.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        anomaly_proportion : Union[float, Tuple[float, float]] (optional, default=(0.2, 0.3))
+            Anomaly proportion (see RandomShapeGenerator).
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be sampled.
+        mask : Optional[str] (optional, default=None)
+            A mask to restrict where the anomalies are generated.
+        radius : Optional[int] (optional, default=None)
+            see RandomShapeGenerator
+        n_points : int (optional, default=100)
+            see RandomShapeGenerator
+        """
+        super().__init__(n_anomalies, anomaly_proportion, mask, radius, n_points)
+        self.std = std
+
+    def _apply_transform_on_anomalies(
+        self, img: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Blurs volumes inside a mask.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The image.
+        mask : np.ndarray
+            The mask.
+
+        Returns
+        -------
+        np.ndarray
+            The modified image.
+        """
+        from torchio.transforms import RandomBlur
+
+        transform = RandomBlur(std=self.std)
+        img[mask.astype(bool)] = transform(img[None, :, :, :]).squeeze(0)[
+            mask.astype(bool)
+        ]
+
+        return img
+
+
+class LocalElasticDeformation(LocalTransform):
+    """Applies Elastic Deformation to anomaly volumes."""
+
+    def __init__(
+        self,
+        max_displacement: Union[float, Tuple[float, float, float]] = 20.0,
+        n_anomalies: Union[int, Tuple[int, int]] = (1, 4),
+        anomaly_proportion: Union[float, Tuple[float, float]] = (0.3, 0.4),
+        mask: Optional[Union[str, Path]] = None,
+        radius: Optional[int] = None,
+        n_points: int = 100,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        max_displacement: Union[float, Tuple[float, float, float]] (optional, default=20.0)
+            Maximum displacement along each dimension.
+        n_anomalies : Union[int, Tuple[int, int]] (optional, default=(1, 4))
+            Number of anomalies to generate.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        anomaly_proportion : Union[float, Tuple[float, float]] (optional, default=(0.3, 0.4))
+            Anomaly proportion (see RandomShapeGenerator).
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be sampled.
+        mask : Optional[str] (optional, default=None)
+            A mask to restrict where the anomalies are generated.
+        radius : Optional[int] (optional, default=None)
+            see RandomShapeGenerator
+        n_points : int (optional, default=100)
+            see RandomShapeGenerator
+        """
+        super().__init__(n_anomalies, anomaly_proportion, mask, radius, n_points)
+        self.max_displacement = max_displacement
+
+    def _apply_transform_on_anomalies(
+        self, img: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Applies Elastic Deformation inside a mask.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The image.
+        mask : np.ndarray
+            The mask.
+
+        Returns
+        -------
+        np.ndarray
+            The modified image.
+        """
+        from torchio.transforms import RandomElasticDeformation
+
+        transform = RandomElasticDeformation(
+            num_control_points=100, max_displacement=self.max_displacement
+        )
+        img[mask.astype(bool)] = transform(img[None, :, :, :]).squeeze(0)[
+            mask.astype(bool)
+        ]
+
+        return img
+
+
+class Compose(LocalTransform):
+    """To compose local transformations."""
+
+    def __init__(
+        self,
+        transforms: List[LocalTransform],
+        n_anomalies: Union[int, Tuple[int, int]] = (1, 4),
+        anomaly_proportion: Union[float, Tuple[float, float]] = (0.1, 0.2),
+        mask: Optional[Union[str, Path]] = None,
+        radius: Optional[int] = None,
+        n_points: int = 100,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        transforms : List[LocalTransform]
+            The list of transforms.
+            Note that the parameters `n_anomalies`, `anomaly_proportion`,
+            `mask`, `radius` and `n_points` of each transform will
+            be overriden.
+        n_anomalies : Union[int, Tuple[int, int]] (optional, default=(1, 4))
+            Number of anomalies to generate.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        anomaly_proportion : Union[float, Tuple[float, float]] (optional, default=(0.1, 0.2))
+            Anomaly proportion (see RandomShapeGenerator).
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be sampled.
+        mask : Optional[str] (optional, default=None)
+            A mask to restrict where the anomalies are generated.
+        radius : Optional[int] (optional, default=None)
+            see RandomShapeGenerator
+        n_points : int (optional, default=100)
+            see RandomShapeGenerator
+        """
+        super().__init__(n_anomalies, anomaly_proportion, mask, radius, n_points)
+        self.transforms = transforms
+
+    def _apply_transform_on_anomalies(
+        self, img: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Applies the transforms in volumes inside a mask.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The image.
+        mask : np.ndarray
+            The mask.
+
+        Returns
+        -------
+        np.ndarray
+            The modified image.
+        """
+        for transform in self.transforms:
+            img, _ = transform(img, mask)
+
+        return img
+
+
+class RandomCompose(LocalTransform):
+    """To randomly compose local transformations."""
+
+    def __init__(
+        self,
+        transforms: List[LocalTransform],
+        n_transforms: Optional[Union[int, Tuple[int, int]]] = None,
+        n_anomalies: Union[int, Tuple[int, int]] = (1, 4),
+        anomaly_proportion: Union[float, Tuple[float, float]] = (0.1, 0.2),
+        mask: Optional[Union[str, Path]] = None,
+        radius: Optional[int] = None,
+        n_points: int = 100,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        transforms : List[LocalTransform]
+            The list of transforms.
+            Note that the parameters `n_anomalies`, `anomaly_proportion`,
+            `mask`, `radius` and `n_points` of each transform will
+            be overriden.
+        n_transforms : Optional[Union[int, Tuple[int, int]]] (optional, default=None)
+            Number of transforms to compose.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+            If None, set to (1, len(transforms)).
+        n_anomalies : Union[int, Tuple[int, int]] (optional, default=(1, 4))
+            Number of anomalies to generate.
+            If tuple, the lower and upper bound of the uniform
+            discrete distribution from which the parameter will be
+            sampled.
+        anomaly_proportion : Union[float, Tuple[float, float]] (optional, default=(0.1, 0.2))
+            Anomaly proportion (see RandomShapeGenerator).
+            If tuple, the lower and upper bound of the uniform
+            distribution from which the parameter will be sampled.
+        mask : Optional[str] (optional, default=None)
+            A mask to restrict where the anomalies are generated.
+        radius : Optional[int] (optional, default=None)
+            see RandomShapeGenerator
+        n_points : int (optional, default=100)
+            see RandomShapeGenerator
+        """
+        super().__init__(n_anomalies, anomaly_proportion, mask, radius, n_points)
+        self.transforms = transforms
+        if n_transforms is None:
+            self.n_transforms = (1, len(transforms))
+        else:
+            try:
+                assert isinstance(n_transforms, int)
+            except AssertionError:
+                assert isinstance(
+                    n_transforms, Iterable
+                ), "n_slices must be an int or an iterable."
+                assert len(n_transforms) == 2, "n_slices must contain two elements."
+            self.n_transforms = n_transforms
+
+    def _select_transforms(self) -> List[LocalTransform]:
+        """
+        Randomly selects transforms.
+
+        Returns
+        -------
+        List[LocalTransform]
+            The selected transforms.
+        """
+        if isinstance(self.n_transforms, int):
+            n_transforms = self.n_transforms
+        else:
+            n_transforms = random.randint(self.n_transforms[0], self.n_transforms[1])
+        idx = np.random.choice(len(self.transforms), size=n_transforms, replace=False)
+        transforms = np.array(self.transforms)[idx]
+
+        return transforms
+
+    def _apply_transform_on_anomalies(
+        self, img: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Randomly selects transforms and applies them in volumes inside a mask.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            The image.
+        mask : np.ndarray
+            The mask.
+
+        Returns
+        -------
+        np.ndarray
+            The modified image.
+        """
+        transforms = self._select_transforms()
+        for transform in transforms:
+            img, _ = transform(img, mask)
+
+        return img

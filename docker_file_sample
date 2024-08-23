@@ -1,0 +1,52 @@
+
+# FROM python:3
+# # Use nvidia/cuda image
+# FROM nvidia/cuda:12.1.3-base-ubuntu20.04 
+# FROM pytorch/pytorch:1.4-cuda10.1-cudnn7-devel
+# FROM arm64v8/python:3
+# FROM linux/arm64 
+# FROM --platform=linux/arm64 alexberkovich/alpine-anaconda3:latest
+# FROM bitnami/pytorch:2.3.1
+FROM pytorch/pytorch:2.3.1-cuda11.8-cudnn8-devel
+#docker pull pytorch/pytorch:2.3.1-cuda11.8-cudnn8-devel
+# The /app directory should act as the main application directory
+WORKDIR /workspace
+
+# Install node packages, install serve, build the app, and remove dependencies at the end
+RUN apt-get update -y
+# RUN apt-get install -y nvidia-container-toolkit
+RUN apt-get -y install python3-pip
+RUN apt-get -y install git
+
+
+
+# Copy local directories to the current local directory of our docker image (/app)
+#COPY ./data/residual /workspace/data/residual
+COPY ./mood/ /workspace/mood
+
+COPY ./docker/scripts/run_sample_abdom.sh  /workspace/run_sample_abdom.sh 
+COPY ./docker/scripts/run_sample_brain.sh  /workspace/run_sample_brain.sh 
+
+
+COPY ./docker/main_python/main_sample_abdom.py /workspace/main_sample_abdom.py
+COPY ./docker/main_python/main_sample_brain.py /workspace/main_sample_brain.py
+
+COPY ./requirements.txt /workspace/requirements.txt
+
+RUN pip install --no-cache-dir -r ./requirements.txt
+
+COPY ./data/MAPS_final_BetaVAE_brain /workspace/maps
+COPY ./data/MAPS_final_BetaVAE_abdom /workspace/maps_abdom
+RUN chmod a+rwx -R /workspace/maps
+RUN chmod a+rwx -R /workspace/maps_abdom
+
+RUN mkdir /mnt/data
+RUN mkdir /mnt/pred
+RUN mkdir -p /mnt/pred/tmp
+
+RUN ln -s /mnt/pred/tmp /tmp
+
+RUN chmod a+rwx -R /workspace
+
+RUN export PYTHONPATH="${PYTHONPATH}/workspace"
+
